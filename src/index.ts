@@ -1,5 +1,7 @@
 import { Redis } from 'ioredis';
 
+type MaybePromise<T> = T | Promise<T>;
+
 export interface RedisCacheSetOptions {
   expiryMode?: 'EX' | 'PX' | 'EXAT' | 'PXAT' | 'NX' | 'XX';
   time?: string | number;
@@ -18,17 +20,17 @@ export interface RedisCacheOptions<T> {
   prefix?: string;
   typename: string;
   idFn?: (data: T) => string;
-  dataFn: (id: string) => Promise<T>;
+  dataFn: (id: string) => MaybePromise<T>;
   setOptions?: RedisCacheSetOptions;
   localCacheOptions?: RedisCacheLocalCacheOptions;
 }
 
-export class RedisCache<T = ({ id: string })> {
+class RedisCache<T = ({ id: string })> {
 
   private client: Redis;
   private baseKey: string;
   private idFn: (data: T) => string;
-  private dataFn: (id: string) => Promise<T>;
+  private dataFn: (id: string) => MaybePromise<T>;
   private setOptions?: RedisCacheSetOptions;
 
   private localCacheOptions?: RedisCacheLocalCacheOptions;
@@ -55,16 +57,19 @@ export class RedisCache<T = ({ id: string })> {
     if (data !== undefined) await this.set(id, data);
   }
   
-  public async get(id: string) {
+  public async get(id: string, forceRefetch?: boolean) {
 
-    const local = this.getLocal(id);
-    if (local !== undefined) return local;
-    
-    const key = this.defineKey(id);
-    const json = await this.client.get(key);
+    if (!forceRefetch) {
 
-    if (json != null) {
-      return JSON.parse(json);
+      const local = this.getLocal(id);
+      if (local !== undefined) return local;
+      
+      const key = this.defineKey(id);
+      const json = await this.client.get(key);
+      
+      if (json != null) {
+        return JSON.parse(json);
+      }
     }
 
     const data = await this.dataFn(id);
@@ -87,11 +92,21 @@ export class RedisCache<T = ({ id: string })> {
     return localCacheEntry.data;
   }
 
-  public async set(id: string, data: T) {
+  public async set(data: T): Promise<void>;
+  public async set(id: string, data: T): Promise<void>;
+  public async set(idOrData: any, overloadData?: T): Promise<void> {
+
+    const id = typeof idOrData == 'string' ? idOrData : this.idFn(idOrData);
+    const data = typeof idOrData == 'string' ?  overloadData : idOrData;
 
     const json = JSON.stringify(data);
     const key = this.defineKey(id);
-    await this.client.set(key, json, this.setOptions?.expiryMode, this.setOptions?.time);
+
+    if (this.setOptions?.expiryMode && this.setOptions?.time) {
+      await this.client.set(key, json, this.setOptions?.expiryMode, this.setOptions?.time);
+    } else {
+      await this.client.set(key, json);
+    }
 
     this.setLocal(id, data);
   }
@@ -103,8 +118,8 @@ export class RedisCache<T = ({ id: string })> {
   }
 
   public async delete(id: string) {
-
-    await this.client.del(id);
+    const key = this.defineKey(id);
+    await this.client.del(key);
     this.deleteLocal(id);
   }
 
@@ -191,4 +206,27 @@ export class RedisCache<T = ({ id: string })> {
       }
     }
   }
+
+  public async clear() {
+    const keys = await this.scanAll(`${this.baseKey}*`);
+    if (keys.length == 0) return;
+    await this.client.del(keys);
+  }
+
+  async scanAll (pattern: string) {
+    const found: string[] = [];
+    let cursor = '0';
+  
+    do {
+      const reply = await this.client.scan(cursor, 'MATCH', pattern);
+  
+      cursor = reply[0];
+      found.push(...reply[1]);
+    } while (cursor !== '0');
+  
+    return found;
+  }
+
 }
+
+export default RedisCache;
