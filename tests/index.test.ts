@@ -1,7 +1,8 @@
 import RedisCache from "../src"
 import Redis from 'ioredis';
+import { timeout } from './utils';
 
-const COMMON_PREFIX = 'testsuit';
+const COMMON_PREFIX = 'testsuite';
 const COMMON_TYPENAME = 'test';
 
 const getRedis = () => {
@@ -19,13 +20,18 @@ const getCache = (_client?: Redis.Redis) => {
   });
 }
 
-describe('suit', () => {
+describe('suite', () => {
 
   const client = getRedis();
   const cache = getCache();
 
   beforeEach(async () => {
     await cache.clear();
+  })
+
+  afterAll(async () => {
+    await client.quit();
+    await cache.close();
   })
 
   test('redis', async () => {
@@ -120,6 +126,108 @@ describe('suit', () => {
     const key = cacheB.defineKey('100');
     const out2 = await client.get(key);
     expect(out2).toBe(null);
+
+    await cacheA.close();
+    await cacheB.close();
+
+  })
+
+  test('refetch', async () => {
+
+    const obj = {
+      id: '1',
+      data: {
+        buffer: [0, 0, 0, 0]
+      }
+    }
+
+    await cache.set(obj);
+    await cache.refetch(obj.id);
+
+    const out = await cache.get(obj.id);
+    expect(out.data).toBeUndefined();
+
+  })
+
+  test('get forceRefetch', async () => {
+    const obj = {
+      id: '1',
+      data: {
+        buffer: [0, 0, 0, 0]
+      }
+    }
+
+    await cache.set(obj);
+    const out = await cache.get(obj.id, true);
+
+    expect(out.data).toBeUndefined();
+  })
+
+  describe('local cache', () => {
+
+    test('max keys', async () => {
+      
+      const cache = new RedisCache<{ [key: string]: any, id: string }>({
+        client,
+        prefix: COMMON_PREFIX,
+        dataFn: (id) => ({ id, type: 'b' }),
+        typename: 'max-keys',
+        idFn: (obj) => obj.id,
+        localCacheOptions: {
+          maxKeys: 2,
+          evictionType: 'FIRST',
+        }
+      });
+      
+      await Promise.all([
+        cache.set({ id: '1', data: '111' }),
+        cache.set({ id: '2', data: '222' }),
+        cache.set({ id: '3', data: '333' }),
+      ])
+      
+      cache.cleanLocalCache();
+      
+      const localCache = cache.getLocalCache()!;
+      expect(localCache['1']).toBeUndefined();
+      expect(localCache['2'].data.data).toBe('222');
+      expect(localCache['3'].data.data).toBe('333');
+      
+      await cache.close();
+    })
+
+    test('oldest used evication', async () => {
+
+      const cache = new RedisCache<{ [key: string]: any, id: string }>({
+        client,
+        prefix: COMMON_PREFIX,
+        dataFn: (id) => ({ id, type: 'b' }),
+        typename: 'oldest-used',
+        idFn: (obj) => obj.id,
+        localCacheOptions: {
+          maxKeys: 2,
+          evictionType: 'OLDEST_USED',
+        }
+      });
+
+      await Promise.all([
+        cache.set({ id: '1', data: '111' }),
+        cache.set({ id: '2', data: '222' }),
+        cache.set({ id: '3', data: '333' }),
+      ])
+
+      await timeout(1);
+
+      await cache.get('1');
+      await cache.get('2');
+      cache.cleanLocalCache();
+      
+      const localCache = cache.getLocalCache()!;
+      expect(localCache['1'].data.data).toBe('111');
+      expect(localCache['2'].data.data).toBe('222');
+      expect(localCache['3']).toBeUndefined();
+        
+      await cache.close();
+    })
 
   })
 
