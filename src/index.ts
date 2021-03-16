@@ -24,7 +24,7 @@ export interface RedisCacheOptions<T> {
   idFn?: (data: T) => string;
   dataFn: (id: string) => MaybePromise<T>;
   setOptions?: RedisCacheSetOptions;
-  localCacheOptions?: RedisCacheLocalCacheOptions;
+  localCacheOptions?: boolean | RedisCacheLocalCacheOptions;
 }
 
 class RedisCache<T = ({ id: string })> {
@@ -46,7 +46,7 @@ class RedisCache<T = ({ id: string })> {
     this.idFn = options.idFn || ((data: any) => data.id);
     this.dataFn = options.dataFn;
     this.setOptions = options.setOptions;
-    this.localCacheOptions = options.localCacheOptions;
+    this.localCacheOptions = (options.localCacheOptions && (typeof options.localCacheOptions != 'object' ? {} : options.localCacheOptions)) || undefined;
     
     if (this.localCacheOptions) this.localCache = {};
     if (this.localCacheOptions?.checkPeriod) {
@@ -61,7 +61,7 @@ class RedisCache<T = ({ id: string })> {
     return data;
   }
   
-  public async get(id: string, forceRefetch?: boolean) {
+  public async get(id: string, forceRefetch?: boolean): Promise<T> {
 
     if (!forceRefetch) {
 
@@ -72,7 +72,9 @@ class RedisCache<T = ({ id: string })> {
       const json = await this.client.get(key);
       
       if (json != null) {
-        return JSON.parse(json);
+        const data = JSON.parse(json);
+        this.setLocal(id, data);
+        return data;
       }
     }
 
@@ -80,14 +82,14 @@ class RedisCache<T = ({ id: string })> {
   }
 
 
-  private getLocal(id: string) {
+  private getLocal(id: string): T | undefined {
     
     if (!this.localCacheEnabled()) return undefined;
     
     const localCacheEntry = this.localCache![id];
     if (!localCacheEntry) return undefined;
 
-    if (localCacheEntry.expireAt && Date.now() < localCacheEntry.expireAt) {
+    if (localCacheEntry.expireAt && localCacheEntry.expireAt <= Date.now()) {
       this.deleteLocal(id);
       return undefined;
     }
@@ -117,7 +119,6 @@ class RedisCache<T = ({ id: string })> {
   
   private setLocal(id: string, data: T) {
     if (!this.localCacheEnabled()) return;
-
     this.localCache![id] = { data, lastUsed: Date.now(), expireAt: this.getLocalExpireTime()  };
   }
 
@@ -189,23 +190,28 @@ class RedisCache<T = ({ id: string })> {
           evictionEntries.forEach(([key]) => {
             delete this.localCache![key];
           })
+          break;
         }
         case 'OLDEST_USED': {
           const evictionEntires = items
-            .sort((a, b) => (a[1].lastUsed || Infinity) - (b[1].lastUsed || Infinity))
-            .slice(0, evictionCount);
+          .sort((a, b) => (a[1].lastUsed || Infinity) - (b[1].lastUsed || Infinity))
+          .slice(0, evictionCount);
+
           evictionEntires.forEach(([key]) => {
             delete this.localCache![key];
           })
+          break;
         }
         case 'CLOSEST_EXPIRY':
         default: {
           const evictionEntries = items
             .sort((a, b) => (a[1].expireAt || Infinity) - (b[1].expireAt || Infinity))
             .slice(0, evictionCount);
-            evictionEntries.forEach(([key]) => {
-              delete this.localCache![key];
-            })
+          console.log(this.localCacheOptions.evictionType, evictionEntries);
+          evictionEntries.forEach(([key]) => {
+            delete this.localCache![key];
+          })
+          break;
         }
       }
     }
