@@ -4,8 +4,6 @@ import RedisCache, { RedisCacheOptions } from './redisCache';
 export type MaybePromise<T> = T | Promise<T>;
 export type DefaultCacheObject = { id: string, [key: string]: any };
 
-// redis-cache -> better-cache
-
 export interface CacheOptions<T> {
   idFn: (data: T) => string;
   dataFn: (id: string) => MaybePromise<T>;
@@ -42,7 +40,7 @@ class Cache<T = DefaultCacheObject> {
     if (forceRefetch) return this.refetch(id);
 
     if (this.localCache) {
-      const localData = await this.localCache.get(id);
+      const localData = this.localCache.get(id);
       if (localData) return localData;
     }
 
@@ -75,7 +73,7 @@ class Cache<T = DefaultCacheObject> {
   }
 
   public async flush() {
-    if (this.localCache) await this.localCache.flush();
+    if (this.localCache) this.localCache.flush();
     if (this.redisCache) await this.redisCache.flush();
   }
 
