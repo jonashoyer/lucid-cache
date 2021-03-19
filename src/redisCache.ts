@@ -6,12 +6,7 @@ export interface RedisCacheOptions<T> {
   prefix?: string;
   typename: string;
   idFn: (data: T) => string;
-  expiry?: RedisExpiryOptions | ((data: T) => MaybePromise<RedisExpiryOptions>);
-}
-
-export interface RedisExpiryOptions {
-  expiryMode: 'EX' | 'PX' | 'EXAT' | 'PXAT' | 'NX' | 'XX';
-  time: string | number;
+  ttl?: number | ((data: T) => MaybePromise<number>);
 }
 
 export default class RedisCache<T> {
@@ -19,13 +14,13 @@ export default class RedisCache<T> {
   private client: Redis;
   private baseKey: string;
   private idFn: (data: T) => string;
-  private expiry?: RedisExpiryOptions | ((data: T) => MaybePromise<RedisExpiryOptions>);
+  private _ttl?: number | ((data: T) => MaybePromise<number>);
 
   constructor(options: RedisCacheOptions<T>) {
     this.client = options.client;
     this.baseKey = `${options.prefix ?? 'cache'}:${options.typename}:`;
     this.idFn = options.idFn;
-    this.expiry = options.expiry;
+    this._ttl = options.ttl;
   }
 
   async get(id: string): Promise<T | undefined> {
@@ -54,9 +49,9 @@ export default class RedisCache<T> {
     const json = JSON.stringify(data);
     const key = this.defineKey(id);
 
-    if (this.expiry) {
-      const opt = await (typeof this.expiry == 'function' ? this.expiry(data) : this.expiry);
-      await this.client.set(key, json, opt.expiryMode, opt.time);
+    if (this._ttl) {
+      const time = await (typeof this._ttl == 'function' ? this._ttl(data) : this._ttl);
+      await this.client.set(key, json, 'PX', time);
       return;
     }
 
@@ -67,6 +62,17 @@ export default class RedisCache<T> {
   async del(id: string) {
     const key = this.defineKey(id);
     await this.client.del(key);
+  }
+
+  async ttl(id: string, ttl?: number) {
+    const key = this.defineKey(id);
+    if (ttl) {
+      await this.client.pexpire(key, ttl);
+      return ttl;
+    }
+    const time = await this.client.pttl(key);
+    if (time < 0) return null;
+    return time;
   }
 
   defineKey(data: T): string;

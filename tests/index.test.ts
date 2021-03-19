@@ -182,11 +182,7 @@ describe('suite', () => {
           client,
           prefix: COMMON_PREFIX,
           typename: 'period',
-          expiry: {
-            expiryMode: 'PX',
-            time: 4
-
-          }
+          ttl: 4,
         },
         dataFn: (id) => ({ id }),
         idFn: (obj) => obj.id,
@@ -205,6 +201,24 @@ describe('suite', () => {
 
       await cache.flush();
       await cache.close();
+    })
+
+    test('redis ttl', async () => {
+      await cache.set({ id: '8', data: 'ttl8' });
+      
+      const outTtl1 = await cache.redisCache.ttl('8');
+      expect(outTtl1).toBeNull();
+      
+      const outTtl2 = await cache.redisCache.ttl('8', 4);
+      expect(outTtl2).toBeGreaterThan(0);
+      
+      const out1 = await cache.redisCache.get('8');
+      expect(out1).toStrictEqual({ id: '8', data: 'ttl8' });
+
+      await timeout(5);
+      const out2 = await cache.redisCache.get('8');
+      expect(out2).toBeUndefined();
+
     })
 
     test('redis cache get all', async () => {
@@ -255,10 +269,7 @@ describe('suite', () => {
           typename: 'period',
         },
         localCache: {
-          expiry: {
-            expiryMode: 'PX',
-            time: 8,
-          }
+          ttl: 8,
         },
         dataFn: (id) => ({ id }),
         idFn: (obj) => obj.id,
@@ -306,10 +317,7 @@ describe('suite', () => {
           typename: 'period',
         },
         localCache: {
-          expiry: {
-            expiryMode: 'EX',
-            time: 0.004
-          }
+          ttl: 4,
         },
         dataFn: (id) => ({ id }),
         idFn: (obj) => obj.id,
@@ -330,6 +338,29 @@ describe('suite', () => {
 
       await cache.flush();
       await cache.close();
+    })
+
+    test('local ttl', async () => {
+      const cache = new Cache<{ [key: string]: any, id: string}>({
+        localCache: {},
+        dataFn: (id) => ({ id }),
+        idFn: (obj) => obj.id,
+      })
+
+      await cache.set({ id: '14', value: 'ttl14' });
+      const ttl1 = cache.localCache.ttl('14');
+      expect(ttl1).toBeNull();
+
+      cache.localCache.ttl('14', 4);
+      const ttl2 = cache.localCache.ttl('14');
+      expect(ttl2).toBeGreaterThan(0);
+      const out1 = cache.localCache.get('14');
+      expect(out1).toStrictEqual({ id: '14', value: 'ttl14' });
+
+      await timeout(5);
+      const out2 = cache.localCache.get('14');
+      expect(out2).toBeUndefined();
+
     })
 
     test('max keys', async () => {

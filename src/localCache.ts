@@ -3,15 +3,10 @@ import ms from 'ms';
 
 export interface LocalCacheOptions<T> {
   idFn: (data: T) => string;
-  expiry?: LocalExpiryOptions | ((data: T) => MaybePromise<LocalExpiryOptions>);
+  ttl?: number | ((data: T) => MaybePromise<number>);
   maxKeys?: number;
   evictionType?: 'OLDEST_USED' | 'CLOSEST_EXPIRY' | 'FIRST';
   checkPeriod?: number;
-}
-
-export interface LocalExpiryOptions {
-  expiryMode: 'EX' | 'PX';
-  time: string | number;
 }
 
 type LocalCacheObject<T> = { [key: string]: { data: T, expireAt?: number, lastUsed?: number } };
@@ -53,30 +48,28 @@ export default class LocalCache<T> {
     const id = typeof data_id == 'string' ? data_id : this.options.idFn(data_id);
     const data = typeof data_id == 'string' ? _data : data_id
 
-    const opt = await (typeof this.options.expiry == 'function' ? this.options.expiry(data) : this.options.expiry);
-    this.cache[id] = { data, lastUsed: Date.now(), expireAt: opt && this.getLocalExpireTime(opt)  };
+    const time = await (typeof this.options.ttl == 'function' ? this.options.ttl(data) : this.options.ttl);
+    this.cache[id] = { data, lastUsed: Date.now(), expireAt: time ? Date.now() + time : undefined  };
   
   }
 
-  async del(id: string) {
+  del(id: string) {
     delete this.cache[id];
   }
 
-
-  private getLocalExpireTime(expiry: LocalExpiryOptions) {
-    
-    switch(expiry.expiryMode) {
-      case 'EX':
-        if (typeof expiry.time == 'string') return (Date.now() + ms(expiry.time)) / 1000;
-        return Date.now() + expiry.time * 1000;
-      case 'PX':
-        if (typeof expiry.time == 'string') return Date.now() + ms(expiry.time);
-        return Date.now() + expiry.time!;
-      default:
-        return undefined;
+  ttl(id: string, ttl?: number) {
+    const e = this.cache[id];
+    if (ttl) {
+      if (!e) return null;
+      e.expireAt = Date.now() + ttl;
+      return ttl;
     }
+    if (!e?.expireAt) return null;
+    const now = Date.now();
+    if (e.expireAt < now) return null;
+    return e.expireAt - now;
   }
-
+  
   public cleanup() {
 
     const items = Object.entries(this.cache);
