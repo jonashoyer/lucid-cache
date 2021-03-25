@@ -1,5 +1,4 @@
 import { MaybePromise } from ".";
-import ms from 'ms';
 
 export interface LocalCacheOptions<T> {
   idFn: (data: T) => string;

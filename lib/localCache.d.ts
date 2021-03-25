@@ -1,14 +1,10 @@
 import { MaybePromise } from ".";
 export interface LocalCacheOptions<T> {
     idFn: (data: T) => string;
-    expiry?: LocalExpiryOptions | ((data: T) => MaybePromise<LocalExpiryOptions>);
+    ttl?: number | ((data: T) => MaybePromise<number>);
     maxKeys?: number;
     evictionType?: 'OLDEST_USED' | 'CLOSEST_EXPIRY' | 'FIRST';
     checkPeriod?: number;
-}
-export interface LocalExpiryOptions {
-    expiryMode: 'EX' | 'PX';
-    time: string | number;
 }
 declare type LocalCacheObject<T> = {
     [key: string]: {
@@ -26,8 +22,8 @@ export default class LocalCache<T> {
     all(): [string, T][];
     set(data: T): Promise<void>;
     set(id: string, data: T): Promise<void>;
-    del(id: string): Promise<void>;
-    private getLocalExpireTime;
+    del(id: string): void;
+    ttl(id: string, ttl?: number): number | null;
     cleanup(): void;
     restore(cache: LocalCacheObject<T>): void;
     startIntervalCheck(): void;

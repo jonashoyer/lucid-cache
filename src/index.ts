@@ -1,41 +1,49 @@
 import LocalCache, { LocalCacheOptions } from './localCache';
 import RedisCache, { RedisCacheOptions } from './redisCache';
+import PersistentStorage, { PersistentStorageOptions } from './persistentStorage';
 
 export type MaybePromise<T> = T | Promise<T>;
 export type DefaultCacheObject = { id: string, [key: string]: any };
 
+export type CacheRedisOptions<T> = Omit<RedisCacheOptions<T>, 'idFn'>;
+export type CacheLocalOptions<T> = Omit<LocalCacheOptions<T>, 'idFn'>;
+export type CachePersistentOptions<T> = Omit<PersistentStorageOptions<T>, 'idFn'>;
+
 export interface CacheOptions<T> {
   idFn: (data: T) => string;
-  dataFn: (id: string) => MaybePromise<T>;
-  redisCache?: Omit<RedisCacheOptions<T>, 'idFn'>;
-  localCache?: Omit<LocalCacheOptions<T>, 'idFn'>;
+  redisCache?: CacheRedisOptions<T>;
+  localCache?: CacheLocalOptions<T>;
+  persistentStorage?: CachePersistentOptions<T>;
 }
 
 class Cache<T = DefaultCacheObject> {
 
   idFn: (data: T) => string;
-  dataFn: (id: string) => MaybePromise<T>; 
 
   redisCache?: RedisCache<T>;
   localCache?: LocalCache<T>;
+  persistentStorage?: PersistentStorage<T>;
 
   constructor(options: CacheOptions<T>) {
 
-    this.idFn = options.idFn;
-    this.dataFn = options.dataFn;
-
-    if (options.redisCache) this.redisCache = new RedisCache({ ...options.redisCache, idFn: options.idFn })
-    if (options.localCache) this.localCache = new LocalCache({ ...options.localCache, idFn: options.idFn })
+    const { idFn, redisCache, localCache, persistentStorage } = options;
+    this.idFn = idFn;
+    
+    if (redisCache) this.redisCache = new RedisCache({ ...redisCache, idFn });
+    if (localCache) this.localCache = new LocalCache({ ...localCache, idFn });
+    if (persistentStorage) this.persistentStorage = new PersistentStorage({ ...persistentStorage, idFn });
   }
 
 
   public async refetch(id: string) {
-    const data = await this.dataFn(id);
+    if (!this.persistentStorage) throw new Error("Can't refetch without persistent storage!");
+    if (!this.persistentStorage?.get) throw new Error("Can't refetch without persistent storage 'getFn'!");
+    const data = await this.persistentStorage.get(id);
     if (data !== undefined) await this.set(id, data);
     return data;
   }
   
-  public async get(id: string, forceRefetch?: boolean): Promise<T> {
+  public async get(id: string, forceRefetch?: boolean): Promise<T | undefined> {
 
     if (forceRefetch) return this.refetch(id);
 
@@ -52,24 +60,31 @@ class Cache<T = DefaultCacheObject> {
       }
     }
 
+    if (!this.persistentStorage?.get) {
+      return undefined;
+    }
+
     return this.refetch(id);
   }
 
 
-  public async set(data: T): Promise<void>;
-  public async set(id: string, data: T): Promise<void>;
-  public async set(idOrData: any, overloadData?: T): Promise<void> {
+  public async set(data: T, persistent?: boolean): Promise<void>;
+  public async set(id: string, data: T, persistent?: boolean): Promise<void>;
+  public async set(id_data: any, persistent_data?: boolean | T, _persistent?: boolean): Promise<void> {
 
-    const id = typeof idOrData == 'string' ? idOrData : this.idFn(idOrData);
-    const data = typeof idOrData == 'string' ?  overloadData : idOrData;
-
+    const id = typeof id_data == 'string' ? id_data : this.idFn(id_data);
+    const data = typeof id_data == 'string' ?  persistent_data : id_data;
+    const persistent = typeof id_data == 'string' ? _persistent : !!persistent_data;
+  
     if (this.localCache) await this.localCache.set(id, data);
     if (this.redisCache) await this.redisCache.set(id, data);
+    if (persistent && this.persistentStorage?.set) await this.persistentStorage.set(id, data);
   }
   
-  public async del(id: string) {
+  public async del(id: string, persistent?: boolean) {
     if (this.localCache) await this.localCache.del(id);
     if (this.redisCache) await this.redisCache.del(id);
+    if (persistent && this.persistentStorage?.del) await this.persistentStorage.del(id);
   }
 
   public async flush() {
